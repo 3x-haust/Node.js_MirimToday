@@ -85,14 +85,10 @@ client.on(Events.ClientReady, async () => {
         ],
       },
       {
-        name: '학기',
-        description: '시간표 정보를 확인할 학기',
+        name: '월',
+        description: '시간표 정보를 확인할 월 (MM 형식)',
         required: true,
         type: pkg.ApplicationCommandOptionType.String,
-        choices: [
-        { name: '1학기', value: '1' },
-        { name: '2학기', value: '2' },
-        ],
       },
       {
         name: '일',
@@ -149,18 +145,17 @@ client.on(Events.InteractionCreate, async (interaction) => {
     const year = interaction.options.get('년').value;
     let month = interaction.options.get('월').value;
     let day = interaction.options.get('일').value;
-    const meal = ['조식', '중식', '석식'];
     month = String(month).padStart(2, '0');
     day = String(day).padStart(2, '0');
     
     const date = year + "-" + month + "-" + day
     try {
       const mealData = await getMealData(date);
-      if (mealData === undefined || mealData[0] === '급식 정보가 없습니다.') {
+      if (mealData === undefined || mealData.dishName.includes('급식 정보가 없습니다.')) {
         const embed = new EmbedBuilder()
           .setColor('#0099ff')
           .setTitle(`${date} ${getDayOfWeek(date)}요일 급식 정보`)
-          .addFields('급식 정보가 없습니다.');
+          .addFields({name: '급식 정보가 없습니다.', value: '\u200B'});
 
         await interaction.reply({ embeds: [embed] });
         return;
@@ -169,9 +164,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
         .setColor('#0099ff')
         .setTitle(`${date} ${getDayOfWeek(date)}요일 급식 정보`)
 
-        for(let i = 0; i < mealData.length; i++) {
-          embed.addFields({ name: '\u200B', value: '\u200B' }, { name: meal[i + (3 - mealData.length)], value: mealData[i]?.split(' ').join('\n') || '' });
-        }
+      for(let i = 0; i < mealData.dishName.length; i++) {
+        embed.addFields({ name: '\u200B', value: '\u200B' }, 
+        { name: mealData.mealName[i], value: mealData.dishName[i]?.split(' ').join('\n') || '' });
+      }
 
       await interaction.reply({ embeds: [embed] });
     } catch (error) {
@@ -182,12 +178,14 @@ client.on(Events.InteractionCreate, async (interaction) => {
     const dep = interaction.options.get('학과').value;
     const grade = interaction.options.get('학년').value;
     const cls = interaction.options.get('반').value;
+    let month = interaction.options.get('월').value;
     let date = interaction.options.get('일').value;
-    if(date < 10) date = '0' + date;
-   
+    date = String(date).padStart(2, '0');
+    month = String(month).padStart(2, '0');
+
     try {
-      const timeTableData = await getTimeTableData(cls, grade, dep, date);
-      if (timeTableData[0] === '시간표 정보가 없습니다.') {
+      const timeTableData = await getTimeTableData(cls, grade, dep, month, date);
+      if (timeTableData === undefined || timeTableData[0] === '시간표 정보가 없습니다.') {
         await interaction.reply("시간표 정보가 없습니다.");
         return;
       }
