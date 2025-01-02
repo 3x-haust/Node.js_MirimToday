@@ -24,4 +24,4 @@
 </a>
 <br />
 
-> **@sunrin_today** - 인스타그램
+> **@mirim_today** - 인스타그램
