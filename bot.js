@@ -85,6 +85,12 @@ client.on(Events.ClientReady, async () => {
         ],
       },
       {
+        name: '년 ',
+        description: '시간표 정보를 확인할 년도 (YYYY 형식)',
+        required: true,
+        type: pkg.ApplicationCommandOptionType.String,
+      },
+      {
         name: '월',
         description: '시간표 정보를 확인할 월 (MM 형식)',
         required: true,
