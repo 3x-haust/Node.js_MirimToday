@@ -85,7 +85,7 @@ client.on(Events.ClientReady, async () => {
         ],
       },
       {
-        name: '년 ',
+        name: '년',
         description: '시간표 정보를 확인할 년도 (YYYY 형식)',
         required: true,
         type: pkg.ApplicationCommandOptionType.String,
@@ -186,11 +186,12 @@ client.on(Events.InteractionCreate, async (interaction) => {
     const cls = interaction.options.get('반').value;
     let month = interaction.options.get('월').value;
     let date = interaction.options.get('일').value;
+    const year = interaction.options.get('년').value;
     date = String(date).padStart(2, '0');
     month = String(month).padStart(2, '0');
 
     try {
-      const timeTableData = await getTimeTableData(cls, grade, dep, month, date);
+      const timeTableData = await getTimeTableData(cls, grade, dep, year, month, date);
       if (timeTableData === undefined || timeTableData[0] === '시간표 정보가 없습니다.') {
         await interaction.reply("시간표 정보가 없습니다.");
         return;
