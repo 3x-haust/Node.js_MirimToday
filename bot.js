@@ -207,7 +207,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
       await interaction.reply({ embeds: [embed] });
     } catch (error) {
-      console.error("Error fetching meal data:", error);
+      console.error("Error fetching time table data:", error);
       await interaction.reply("시간표 정보를 불러오는데 문제가 발생했습니다.");
     }
   }
