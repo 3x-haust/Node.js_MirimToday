@@ -1,0 +1,28 @@
+version: '3.8'
+
+services:
+  app:
+    build: .
+    container_name: node-app
+    restart: unless-stopped
+    env_file:
+      - .env
+    command: ["node", "index.js"]
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+
+  bot:
+    build: .
+    container_name: node-bot
+    restart: unless-stopped
+    env_file:
+      - .env
+    command: ["node", "bot.js"]
+    depends_on:
+      - app
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+
+networks:
+  default:
+    driver: bridge
