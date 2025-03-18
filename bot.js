@@ -2,6 +2,7 @@ import pkg from 'discord.js';
 import dotenv from 'dotenv';
 import axios from 'axios';
 import fs from 'fs';
+import cron from 'node-cron';
 
 const { 
   Client, 
@@ -47,6 +48,24 @@ loadSchoolData();
 
 client.once(Events.ClientReady, async () => {
   console.log(`Ready! Logged in as ${client.user.tag}`);
+
+  cron.schedule('0 6 * * *', () => {
+    sendMealInfoAutomatically('조식', 6, 0);
+  }, {
+    timezone: 'Asia/Seoul',
+  });
+
+  cron.schedule('0 10 * * *', () => {
+    sendMealInfoAutomatically('중식', 10, 0);
+  }, {
+    timezone: 'Asia/Seoul',
+  });
+
+  cron.schedule('30 16 * * *', () => {
+    sendMealInfoAutomatically('석식', 16, 30);
+  }, {
+    timezone: 'Asia/Seoul',
+  });
 });
 
 client.on(Events.ClientReady, async () => {
@@ -189,11 +208,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
       return;
     }
 
-    // Create a dedicated channel
     const channelName = `${schoolInfo.SCHUL_NM}-${grade}학년-${cls}반${department ? '-' + department : ''}`;
     const channel = await interaction.guild.channels.create({
       name: channelName,
-      type: 0, // Text channel
+      type: 0,
       permissionOverwrites: [
         {
           id: interaction.guild.id,
@@ -202,7 +220,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
       ],
     });
 
-    // Store school and class data for the channel
     if (!schoolData.guilds[guildId]) schoolData.guilds[guildId] = { channels: {} };
     schoolData.guilds[guildId].channels[channel.id] = {
       schoolName: schoolInfo.SCHUL_NM,
@@ -416,7 +433,53 @@ async function showTimeTableInfo(interaction, schoolInfo, dateStr, isUpdate = fa
   }
 }
 
-client.login(process.env.DISCORD_TOKEN);
+async function getAvailableMealTypes(officeCode, schoolCode, date) {
+  const mealData = await getMealData(officeCode, schoolCode, date);
+  return mealData.mealName;
+}
+
+async function sendMealInfoAutomatically(mealType, hour, minute) {
+  const now = new Date();
+  const formattedDate = formatDate(now).formatted;
+
+  for (const guildId in schoolData.guilds) {
+    const guild = client.guilds.cache.get(guildId);
+    if (!guild) continue;
+
+    for (const channelId in schoolData.guilds[guildId].channels) {
+      const channel = guild.channels.cache.get(channelId);
+      if (!channel) continue;
+
+      const schoolInfo = schoolData.guilds[guildId].channels[channelId];
+      const availableMealTypes = await getAvailableMealTypes(
+        schoolInfo.officeCode,
+        schoolInfo.schoolCode,
+        formattedDate
+      );
+
+      if (availableMealTypes.includes(mealType)) {
+        const mealData = await getMealData(
+          schoolInfo.officeCode,
+          schoolInfo.schoolCode,
+          formattedDate
+        );
+        const mealIndex = mealData.mealName.indexOf(mealType);
+        if (mealIndex !== -1) {
+          const embed = new EmbedBuilder()
+            .setColor('#0099ff')
+            .setTitle(`${formattedDate} ${getDayOfWeek(formattedDate)}요일 ${mealType}`)
+            .setDescription(`${schoolInfo.schoolName}`)
+            .addFields({
+              name: mealType,
+              value: mealData.dishName[mealIndex].split(' ').join('\n') || '정보 없음',
+            });
+
+          await channel.send({ embeds: [embed] });
+        }
+      }
+    }
+  }
+}
 
 async function getMealData(officeCode, schoolCode, date1) {
   const date = date1.replace(/-/g, '');
@@ -455,3 +518,5 @@ async function getTimeTableData(officeCode, schoolCode, grade, cls, dep, year, m
     return ['시간표 정보가 없습니다.'];
   }
 }
+
+client.login(process.env.DISCORD_TOKEN);
