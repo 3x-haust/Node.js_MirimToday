@@ -23,9 +23,18 @@ services:
     restart: unless-stopped
     env_file:
       - .env
-    command: ["/bin/sh", "-c", "cp /shared-data/schoolData.json /app/schoolData.json && node bot.js"]
     depends_on:
       - file-helper
+    command:
+      - /bin/sh
+      - -c
+      - |
+        while [ ! -f /shared-data/schoolData.json ]; do
+          echo "Waiting for schoolData.json..."
+          sleep 0.5
+        done
+        cp /shared-data/schoolData.json /app/schoolData.json
+        node bot.js
     volumes:
       - shared-data:/shared-data
       - /etc/localtime:/etc/localtime:ro
