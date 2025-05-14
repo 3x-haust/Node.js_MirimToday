@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   app:
     build: .
@@ -11,6 +9,14 @@ services:
     volumes:
       - /etc/localtime:/etc/localtime:ro
 
+  file-helper:
+    image: busybox
+    container_name: file-helper
+    volumes:
+      - ./schoolData.json:/tmp/schoolData.json:ro
+      - shared-data:/shared-data
+    command: ["sh", "-c", "cp /tmp/schoolData.json /shared-data/schoolData.json"]
+
   bot:
     build: .
     container_name: node-bot
@@ -19,19 +25,10 @@ services:
       - .env
     command: ["/bin/sh", "-c", "cp /shared-data/schoolData.json /app/schoolData.json && node bot.js"]
     depends_on:
-      - app
+      - file-helper
     volumes:
       - shared-data:/shared-data
       - /etc/localtime:/etc/localtime:ro
-
-  file-helper:
-    image: busybox
-    container_name: file-helper
-    volumes:
-      - shared-data:/shared-data
-    command: ["sh", "-c", "cp /source/schoolData.json /shared-data/schoolData.json"]
-    volumes_from:
-      - node-bot
 
 volumes:
   shared-data:
