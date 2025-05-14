@@ -17,12 +17,21 @@ services:
     restart: unless-stopped
     env_file:
       - .env
-    command: ["node", "bot.js"]
+    command: ["/bin/sh", "-c", "cp /shared-data/schoolData.json /app/schoolData.json && node bot.js"]
     depends_on:
       - app
     volumes:
+      - shared-data:/shared-data
       - /etc/localtime:/etc/localtime:ro
 
-networks:
-  default:
-    driver: bridge
+  file-helper:
+    image: busybox
+    container_name: file-helper
+    volumes:
+      - shared-data:/shared-data
+    command: ["sh", "-c", "cp /source/schoolData.json /shared-data/schoolData.json"]
+    volumes_from:
+      - node-bot
+
+volumes:
+  shared-data:
