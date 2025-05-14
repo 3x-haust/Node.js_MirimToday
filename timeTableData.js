@@ -4,8 +4,6 @@ dotenv.config();
 
 export async function getTimeTableData(cls, grade, dep, year, month, date) {
   const url = `https://open.neis.go.kr/hub/hisTimetable?Key=${process.env.KEY}&Type=json&ATPT_OFCDC_SC_CODE=B10&SD_SCHUL_CODE=7011569&CLASS_NM=${cls}&DDDEP_NM=${dep}&GRADE=${grade}&ALL_TI_YMD=${year}${month}${date}`;
-  console.log(url);
-  
   try {
     const response = await axios.get(url);
     if(response.status != 200)  return ['시간표 정보가 없습니다.'];
@@ -19,4 +17,4 @@ export async function getTimeTableData(cls, grade, dep, year, month, date) {
   }
 }
 
-// console.log(getTimeTableData('2', '2', '뉴미디어소프트웨어과', '2025', '03', '25').then(console.log));
+//getTimeTableData('21');
