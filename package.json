@@ -11,11 +11,13 @@
   "license": "ISC",
   "dependencies": {
     "axios": "^1.7.1",
+    "bluebird": "^3.7.2",
     "canvas": "^2.11.2",
     "discord": "^0.8.2",
     "discord.js": "^14.15.2",
     "dotenv": "^16.4.5",
     "fs": "^0.0.1-security",
+    "inquirer": "^12.9.3",
     "instagram-private-api": "^1.46.1",
     "node-cron": "^3.0.3",
     "request-promise": "^4.2.6",
