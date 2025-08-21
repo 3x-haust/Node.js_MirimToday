@@ -6,7 +6,6 @@ node_modules/
 
 # IG session & runtime artifacts
 .ig-state.json
-assets/results/
 
 # Logs
 npm-debug.log*
