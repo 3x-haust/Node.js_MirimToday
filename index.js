@@ -87,7 +87,7 @@ export async function createImage(mealData, date) {
       .replace(/\r\n|\r|\n/g, '\n')
       .replace(/<br\s*\/?>/gi, '\n');
     let items = s.split('\n').map(t => t.trim()).filter(Boolean);
-    if (items.length <= 1) items = s.split(/[·•|/\,\-]+/).map(t => t.trim()).filter(Boolean);
+    if (items.length <= 1) items = s.split(/[·•|\/\,\-]+/).map(t => t.trim()).filter(Boolean);
   if (items.length <= 1) items = s.split(/\s+/).map(t => t.trim()).filter(Boolean);
     return items;
   };
@@ -173,6 +173,7 @@ async function login() {
     try {
       await instagram.account.currentUser();
       console.log('🔐 기존 인스타그램 세션 사용');
+      await saveIgState();
       return;
     } catch (e) {
       console.log('ℹ️ 기존 세션이 만료되어 재로그인합니다.');
@@ -242,6 +243,7 @@ async function uploadImageToInstagram() {
       file: image.file,
       caption: `미림마이스터고 급식\n\n${todayDate}\n#급식 #미림마이스터고`
     });
+    await saveIgState();
 
     console.log(`✅ 인스타그램 게시물 업로드 성공: meal.png`);
   } catch (error) {
@@ -259,6 +261,7 @@ async function uploadStory() {
     await instagram.publish.story({
       file: image,
     });
+    await saveIgState();
 
     console.log(`✅ 인스타그램 스토리 업로드 성공: meal.png`);
   } catch (error) {
@@ -295,6 +298,17 @@ async function runWithRetry(fn, delay = 60000) {
       await fn();
       break;
     } catch (error) {
+      if (
+        error?.name === 'IgLoginRequiredError' ||
+        (typeof error?.message === 'string' && error.message.includes('login_required'))
+      ) {
+        const igStatePath = IG_STATE_PATH.startsWith('.') ? `${process.cwd()}/${IG_STATE_PATH.replace('./','')}` : IG_STATE_PATH;
+        if (fs.existsSync(igStatePath)) {
+          fs.unlinkSync(igStatePath);
+          console.log('.ig-state.json 파일을 삭제했습니다. 프로그램을 재시도합니다.');
+        }
+        continue;
+      }
       console.log(`오류 발생. 다음 재시도는 ${delay / 1000}초 후 입니다.`);
       console.log(`🛑 오류 내용: ${error}`);
       await new Promise(resolve => setTimeout(resolve, delay));
@@ -302,7 +316,7 @@ async function runWithRetry(fn, delay = 60000) {
   }
 }
 
-cron.schedule('0 0 6 * * 1-5', async () => {
-// cron.schedule('0 * * * * 1-5', async () => {
+// cron.schedule('0 0 6 * * 1-5', async () => {
+cron.schedule('0 * * * * 1-5', async () => {
   await runWithRetry(run);
 });
