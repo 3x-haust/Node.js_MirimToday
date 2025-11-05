@@ -274,7 +274,7 @@ async function showMealInfo(interaction, dateStr, schoolInfo, selectedMealType =
   try {
     const mealData = await getMealData(schoolInfo.officeCode, schoolInfo.schoolCode, formatted);
 
-    if (mealData === undefined || mealData.dishName.includes('급식 정보가 없습니다.')) {
+    if (mealData === undefined || (mealData.dishName[0] && mealData.dishName[0].includes('급식 정보가 없습니다.'))) {
       const embed = new EmbedBuilder()
         .setColor('#FF5733')
         .setTitle(`${formatted} ${getDayOfWeek(formatted)}요일 급식 정보`)
@@ -321,7 +321,7 @@ async function showMealInfo(interaction, dateStr, schoolInfo, selectedMealType =
 
     const mealIndex = mealData.mealName.indexOf(mealTypes[mealIndexToShow]);
     if (mealIndex !== -1) {
-      embed.addFields({ name: mealData.mealName[mealIndex], value: mealData.dishName[mealIndex]?.split(' ').join('\n') || '정보 없음' });
+      embed.addFields({ name: mealData.mealName[mealIndex], value: mealData.dishName[mealIndex]?.join('\n') || '정보 없음' });
     } else {
       embed.addFields({ name: '선택한 급식이 없습니다.', value: '다른 급식을 선택해주세요.' });
     }
@@ -471,7 +471,7 @@ async function sendMealInfoAutomatically(mealType, hour, minute) {
             .setDescription(`${schoolInfo.schoolName}`)
             .addFields({
               name: mealType,
-              value: mealData.dishName[mealIndex].split(' ').join('\n') || '정보 없음',
+              value: mealData.dishName[mealIndex].join('\n') || '정보 없음',
             });
 
           await channel.send({ embeds: [embed] });
@@ -487,19 +487,30 @@ async function getMealData(officeCode, schoolCode, date1) {
   try {
     const response = await axios.get(url);
     if (!response.data.mealServiceDietInfo) {
-      return { "dishName": ['급식 정보가 없습니다.'], "mealName": [], "orplc": [] };
+      return { "dishName": [['급식 정보가 없습니다.']], "mealName": [], "orplc": [] };
     }
     const mealData = response.data.mealServiceDietInfo[1].row;
     let dishNames = mealData.map(meal => meal.DDISH_NM);
     let mealName = mealData.map(meal => meal.MMEAL_SC_NM);
     let orplc = mealData.map(meal => meal.ORPLC_INFO);
+    
     dishNames = dishNames.map(dish => {
-      return dish.replace(/<[^>]*>/g, '').replace(/\([^)]*\)/g, '').replace(/\*/g, '').replace(/\./g, '');
+      const cleaned = dish.replace(/<br\s*\/?>/gi, '\n');
+      const items = cleaned.split('\n')
+        .map(item => item.trim())
+        .filter(item => item.length > 0)
+        .map(item => {
+          return item.replace(/\([^)]*\)/g, '').replace(/\*/g, '').replace(/\./g, '').trim();
+        })
+        .filter(item => item.length > 0);
+      
+      return items;
     });
+    
     return { "dishName": dishNames, "mealName": mealName, "orplc": orplc };
   } catch (error) {
     console.error(`Error fetching meal data: ${error}`);
-    return { "dishName": ['급식 정보가 없습니다.'], "mealName": [], "orplc": [] };
+    return { "dishName": [['급식 정보가 없습니다.']], "mealName": [], "orplc": [] };
   }
 }
 
