@@ -167,6 +167,12 @@ async function getSchoolInfo(schoolName) {
 
 client.on(Events.InteractionCreate, async (interaction) => {
   if (interaction.isButton()) {
+    try {
+      if (!interaction.deferred && !interaction.replied) {
+        await interaction.deferUpdate();
+      }
+    } catch (e) {
+    }
     const [action, date, mealType] = interaction.customId.split('|');
     const guildId = interaction.guildId;
     const channelId = interaction.channelId;
@@ -196,6 +202,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
   const { commandName } = interaction;
 
   if (commandName === '학교등록') {
+    if (!interaction.deferred && !interaction.replied) {
+      await interaction.deferReply();
+    }
     const schoolName = interaction.options.getString('학교명');
     const grade = interaction.options.getString('학년');
     const cls = interaction.options.getString('반');
@@ -237,7 +246,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       .setDescription(`<#${channel.id}> 채널이 생성되었습니다.\n${schoolInfo.SCHUL_NM} ${grade}학년 ${cls}반 ${department}로 설정됨.`)
       .addFields({ name: '사용 가능한 명령어', value: '/급식, /시간표 (이 채널에서만 사용 가능)' });
 
-    await interaction.reply({ embeds: [embed] });
+    await safeRespond(interaction, { embeds: [embed] }, false);
   } else if (commandName === '급식') {
     const guildId = interaction.guildId;
     const channelId = interaction.channelId;
@@ -250,6 +259,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
     const today = new Date();
     const requestedDate = interaction.options.getString('날짜') || formatDate(today).formatted;
+    if (!interaction.deferred && !interaction.replied) {
+      await interaction.deferReply();
+    }
     await showMealInfo(interaction, requestedDate, schoolInfo);
   } else if (commandName === '시간표') {
     const guildId = interaction.guildId;
@@ -263,6 +275,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
     const today = new Date();
     const requestedDate = interaction.options.getString('날짜') || formatDate(today).formatted;
+    if (!interaction.deferred && !interaction.replied) {
+      await interaction.deferReply();
+    }
     await showTimeTableInfo(interaction, schoolInfo, requestedDate);
   }
 });
@@ -291,11 +306,7 @@ async function showMealInfo(interaction, dateStr, schoolInfo, selectedMealType =
           .setStyle(ButtonStyle.Secondary)
       );
 
-      if (isUpdate) {
-        await interaction.update({ embeds: [embed], components: [row] });
-      } else {
-        await interaction.reply({ embeds: [embed], components: [row] });
-      }
+      await safeRespond(interaction, { embeds: [embed], components: [row] }, isUpdate);
       return;
     }
 
@@ -350,14 +361,18 @@ async function showMealInfo(interaction, dateStr, schoolInfo, selectedMealType =
         .setStyle(ButtonStyle.Secondary)
     );
 
-    if (isUpdate) {
-      await interaction.update({ embeds: [embed], components: [mealTypeButtons, navigationButtons] });
-    } else {
-      await interaction.reply({ embeds: [embed], components: [mealTypeButtons, navigationButtons] });
-    }
+    await safeRespond(interaction, { embeds: [embed], components: [mealTypeButtons, navigationButtons] }, isUpdate);
   } catch (error) {
     console.error("Error fetching meal data:", error);
-    await interaction.reply({ content: "급식 정보를 불러오는데 문제가 발생했습니다.", ephemeral: true });
+    try {
+      if (interaction.deferred) {
+        await interaction.editReply({ content: "급식 정보를 불러오는데 문제가 발생했습니다.", embeds: [], components: [] });
+      } else if (!interaction.replied) {
+        await interaction.reply({ content: "급식 정보를 불러오는데 문제가 발생했습니다.", ephemeral: true });
+      } else {
+        await interaction.followUp({ content: "급식 정보를 불러오는데 문제가 발생했습니다.", ephemeral: true });
+      }
+    } catch { /* swallow */ }
   }
 }
 
@@ -394,11 +409,7 @@ async function showTimeTableInfo(interaction, schoolInfo, dateStr, isUpdate = fa
           .setStyle(ButtonStyle.Secondary)
       );
 
-      if (isUpdate) {
-        await interaction.update({ embeds: [embed], components: [row] });
-      } else {
-        await interaction.reply({ embeds: [embed], components: [row] });
-      }
+      await safeRespond(interaction, { embeds: [embed], components: [row] }, isUpdate);
       return;
     }
 
@@ -422,14 +433,18 @@ async function showTimeTableInfo(interaction, schoolInfo, dateStr, isUpdate = fa
         .setStyle(ButtonStyle.Secondary)
     );
 
-    if (isUpdate) {
-      await interaction.update({ embeds: [embed], components: [row] });
-    } else {
-      await interaction.reply({ embeds: [embed], components: [row] });
-    }
+    await safeRespond(interaction, { embeds: [embed], components: [row] }, isUpdate);
   } catch (error) {
     console.error("Error fetching timetable data:", error);
-    await interaction.reply({ content: "시간표 정보를 불러오는데 문제가 발생했습니다.", ephemeral: true });
+    try {
+      if (interaction.deferred) {
+        await interaction.editReply({ content: "시간표 정보를 불러오는데 문제가 발생했습니다.", embeds: [], components: [] });
+      } else if (!interaction.replied) {
+        await interaction.reply({ content: "시간표 정보를 불러오는데 문제가 발생했습니다.", ephemeral: true });
+      } else {
+        await interaction.followUp({ content: "시간표 정보를 불러오는데 문제가 발생했습니다.", ephemeral: true });
+      }
+    } catch { /* swallow */ }
   }
 }
 
@@ -531,3 +546,36 @@ async function getTimeTableData(officeCode, schoolCode, grade, cls, dep, year, m
 }
 
 client.login(process.env.DISCORD_TOKEN);
+
+async function safeRespond(interaction, payload, isUpdate) {
+  try {
+    if (isUpdate) {
+      if (interaction.deferred || interaction.replied) {
+        await interaction.editReply(payload);
+      } else {
+        await interaction.update(payload);
+      }
+    } else {
+      if (interaction.deferred) {
+        await interaction.editReply(payload);
+      } else if (!interaction.replied) {
+        await interaction.reply(payload);
+      } else {
+        await interaction.followUp(payload);
+      }
+    }
+  } catch (err) {
+    try {
+      if (interaction.deferred || interaction.replied) {
+        await interaction.editReply(payload);
+      } else {
+        await interaction.reply(payload);
+      }
+    } catch {
+      try {
+        await interaction.followUp(payload);
+      } catch {
+      }
+    }
+  }
+}
