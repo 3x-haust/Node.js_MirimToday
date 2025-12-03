@@ -213,7 +213,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
     const schoolInfo = await getSchoolInfo(schoolName);
     if (!schoolInfo) {
-      await interaction.reply({ content: '해당 학교를 찾을 수 없습니다.', ephemeral: true });
+      await safeRespond(interaction, { content: '해당 학교를 찾을 수 없습니다.' }, false);
       return;
     }
 
