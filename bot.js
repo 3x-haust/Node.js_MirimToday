@@ -213,7 +213,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
     const schoolInfo = await getSchoolInfo(schoolName);
     if (!schoolInfo) {
-      await safeRespond(interaction, { content: '해당 학교를 찾을 수 없습니다.' }, false);
+      await interaction.editReply({ content: '해당 학교를 찾을 수 없습니다.' });
       return;
     }
 
@@ -246,7 +246,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       .setDescription(`<#${channel.id}> 채널이 생성되었습니다.\n${schoolInfo.SCHUL_NM} ${grade}학년 ${cls}반 ${department}로 설정됨.`)
       .addFields({ name: '사용 가능한 명령어', value: '/급식, /시간표 (이 채널에서만 사용 가능)' });
 
-    await safeRespond(interaction, { embeds: [embed] }, false);
+    await interaction.editReply({ embeds: [embed] });
   } else if (commandName === '급식') {
     const guildId = interaction.guildId;
     const channelId = interaction.channelId;
