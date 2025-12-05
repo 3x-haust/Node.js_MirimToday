@@ -289,8 +289,8 @@ async function runWithRetry(fn, delay = 60000, maxAttempts = 15) {
   logLocal(`최대 시도 횟수(${maxAttempts}) 초과`);
 }
 
-logLocal('크론 스케줄러 시작 (평일 매 시간 15분)');
-cron.schedule('15 * * * * 1-5', async () => {
+logLocal('크론 스케줄러 시작 ');
+cron.schedule('0 0 6 * * 1-5', async () => {
   logLocal('크론 작업 트리거됨');
   await runWithRetry(run);
 }, { timezone: 'Asia/Seoul' });
