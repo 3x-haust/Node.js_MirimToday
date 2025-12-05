@@ -36,32 +36,6 @@ function logLocal(message) {
   console.log(message);
 }
 
-function isRunningInDocker() {
-  try {
-    if (fs.existsSync('/.dockerenv')) return true;
-    const cgroup = '/proc/1/cgroup';
-    if (fs.existsSync(cgroup)) {
-      const content = fs.readFileSync(cgroup, 'utf8');
-      return content.includes('docker') || content.includes('kubepods');
-    }
-  } catch {}
-  return false;
-}
-
-async function fallbackToDocker() {
-  if (isRunningInDocker()) {
-    logLocal('ℹ️ 이미 Docker 컨테이너 내부에서 실행 중이므로 도커 전환을 생략합니다.');
-    return;
-  }
-  try {
-    logLocal('🐳 최대 재시도 초과. Docker로 전환하여 실행을 시도합니다...');
-    await exec('docker compose up -d --build app');
-    logLocal('✅ Docker(app) 기동 명령 실행됨. 상태는 `docker compose ps`로 확인하세요.');
-  } catch (e) {
-    logLocal(`🛑 Docker 전환 실패: ${e?.message || e}`);
-  }
-}
-
 async function saveIgState() {
   try {
     const serialized = await instagram.state.serialize();
@@ -188,16 +162,19 @@ export function getDate() {
 }
 
 async function login() {
+  logLocal('로그인 시도 중...');
   instagram.state.generateDevice(process.env.IG_USERNAME);
   const restored = await loadIgStateIfExists();
   if (restored) {
     try {
       await instagram.account.currentUser();
+      logLocal('저장된 세션으로 로그인 성공');
       await saveIgState();
       return;
     } catch {}
   }
   try {
+    logLocal('새로운 로그인 시도...');
     const auth = await instagram.account.login(process.env.IG_USERNAME, process.env.IG_PASSWORD);
   } catch (err) {
     if (err instanceof IgCheckpointError) {
@@ -212,9 +189,9 @@ async function login() {
         await instagram.challenge.auto(true);
       } catch {
         try {
-          await instagram.challenge.selectVerifyMethod('email');
+          await instagram.challenge.selectVerifyMethod('phone');
         } catch {
-          try { await instagram.challenge.selectVerifyMethod('phone'); } catch {}
+          try { await instagram.challenge.selectVerifyMethod('email'); } catch {}
         }
       }
       const envCode = process.env.IG_CHALLENGE_CODE?.trim();
@@ -230,10 +207,12 @@ async function login() {
       throw err;
     }
   }
+  logLocal('로그인 완료');
   await saveIgState();
 }
 
 async function uploadImageToInstagram() {
+  logLocal('인스타그램 피드 업로드 시작...');
   const parsedDay = getDate().split('-');
   const todayDate = `${parsedDay[0]}년 ${parsedDay[1]}월 ${parsedDay[2]}일 ${getDayOfWeek(getDate())}요일`;
   try {
@@ -243,37 +222,51 @@ async function uploadImageToInstagram() {
       file: image.file,
       caption: `미림마이스터고 급식\n\n${todayDate}\n#급식 #미림마이스터고`
     });
+    logLocal('인스타그램 피드 업로드 성공');
     await saveIgState();
   } catch (error) {
+    logLocal(`인스타그램 피드 업로드 실패: ${error.message}`);
     throw error;
   }
 }
 
 async function uploadStory() {
+  logLocal('인스타그램 스토리 업로드 시작...');
   try {
     const imagePath = './assets/results/meal.png';
     const image = fs.readFileSync(imagePath);
     await instagram.publish.story({ file: image });
+    logLocal('인스타그램 스토리 업로드 성공');
     await saveIgState();
   } catch (error) {
+    logLocal(`인스타그램 스토리 업로드 실패: ${error.message}`);
     throw error;
   }
 }
 
 async function run() {
+  const today = getDate();
+  logLocal(`===== 급식 자동 업로드 시작 (${today}) =====`);
   await login();
-  const mealData = await getMealData(getDate());
+  logLocal('급식 데이터 가져오는 중...');
+  const mealData = await getMealData(today);
   if (mealData.dishName === undefined || mealData.dishName.length === 0 || mealData.dishName === '급식 정보가 없습니다.') {
+    logLocal('급식 정보가 없습니다. 업로드를 건너뜁니다.');
     return;
   }
-  await createImage(mealData.dishName, getDate());
+  logLocal(`급식 데이터: ${JSON.stringify(mealData.dishName)}`);
+  logLocal('급식 이미지 생성 중...');
+  await createImage(mealData.dishName, today);
+  logLocal('급식 이미지 생성 완료');
   const uploadMode = process.env.UPLOAD_MODE;
+  logLocal(`업로드 모드: ${uploadMode}`);
   if (uploadMode === 'all' || uploadMode === 'post') {
     await uploadImageToInstagram();
   }
   if (uploadMode === 'all' || uploadMode === 'story') {
     await uploadStory();
   }
+  logLocal('===== 급식 자동 업로드 완료 =====');
 }
 
 async function runWithRetry(fn, delay = 60000, maxAttempts = 15) {
@@ -282,20 +275,22 @@ async function runWithRetry(fn, delay = 60000, maxAttempts = 15) {
       await fn();
       return;
     } catch (error) {
+      logLocal(`시도 ${attempt}/${maxAttempts} 실패: ${error.message}`);
       if (error?.name === 'IgLoginRequiredError' || error?.message?.includes('login_required')) {
+        logLocal('로그인 필요 - 재로그인 시도...');
         if (fs.existsSync(IG_STATE_PATH)) fs.unlinkSync(IG_STATE_PATH);
         await login();
         continue;
       }
-      if (attempt >= maxAttempts) {
-        await fallbackToDocker();
-        return;
-      }
+      logLocal(`${delay / 1000}초 후 재시도...`);
       await new Promise(resolve => setTimeout(resolve, delay));
     }
   }
+  logLocal(`최대 시도 횟수(${maxAttempts}) 초과`);
 }
 
-cron.schedule('0 0 6 * * 1-5', async () => {
+logLocal('크론 스케줄러 시작 (평일 매 시간 15분)');
+cron.schedule('15 * * * * 1-5', async () => {
+  logLocal('크론 작업 트리거됨');
   await runWithRetry(run);
-});
+}, { timezone: 'Asia/Seoul' });
