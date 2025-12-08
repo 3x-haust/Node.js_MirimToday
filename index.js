@@ -291,6 +291,7 @@ async function runWithRetry(fn, delay = 60000, maxAttempts = 15) {
 
 logLocal('크론 스케줄러 시작 ');
 cron.schedule('0 0 6 * * 1-5', async () => {
-  logLocal('크론 작업 트리거됨');
+  const currentTime = new Date().toLocaleString('en-US', { timeZone: 'Asia/Seoul' });
+  logLocal(`크론 작업 트리거됨 - 현재 시간: ${currentTime}`);
   await runWithRetry(run);
 }, { timezone: 'Asia/Seoul' });
