@@ -58,13 +58,13 @@ async function loadIgStateIfExists() {
 
 function getDayOfWeek(yyyyMMdd) {
   const day = ['일', '월', '화', '수', '목', '금', '토'];
-  return new Date(yyyyMMdd).getDay();
+  const dayOfWeek = new Date(yyyyMMdd).getDay();
+  return day[dayOfWeek];
 }
 
 export async function createImage(mealData, date) {
   const W = 1080;
   const H = 1920;
-
   registerFont('./assets/fonts/Eunjin.ttf', { family: 'Eunjin' });
   registerFont('./assets/fonts/Pretendard-Regular.ttf', { family: 'Pretendard-Regular' });
   registerFont('./assets/fonts/Pretendard-Bold.ttf', { family: 'Pretendard-Bold' });
@@ -77,9 +77,7 @@ export async function createImage(mealData, date) {
   ctx.drawImage(image, 0, 0, W, H);
 
   const parsedDay = date.split('-');
-  const week = ['일', '월', '화', '수', '목', '금', '토'][getDayOfWeek(date)];
-  const text = `${parsedDay[1]}. ${parsedDay[2]}. ${week}`;
-
+  const text = `${parsedDay[1]}. ${parsedDay[2]}. ${getDayOfWeek(date)}`;
   ctx.textBaseline = 'top';
   ctx.font = '96px "Pretendard-Black"';
   ctx.fillStyle = '#dde7ba';
@@ -169,7 +167,6 @@ async function login() {
   logLocal('로그인 시도 중...');
   instagram.state.generateDevice(process.env.IG_USERNAME);
   const restored = await loadIgStateIfExists();
-
   if (restored) {
     try {
       await instagram.account.currentUser();
@@ -178,10 +175,9 @@ async function login() {
       return;
     } catch {}
   }
-
   try {
     logLocal('새로운 로그인 시도...');
-    await instagram.account.login(process.env.IG_USERNAME, process.env.IG_PASSWORD);
+    const auth = await instagram.account.login(process.env.IG_USERNAME, process.env.IG_PASSWORD);
   } catch (err) {
     if (err instanceof IgCheckpointError) {
       try {
@@ -191,7 +187,6 @@ async function login() {
           instagram.state.challenge = challenge;
         }
       } catch {}
-
       try {
         await instagram.challenge.auto(true);
       } catch {
@@ -201,19 +196,19 @@ async function login() {
           try { await instagram.challenge.selectVerifyMethod('email'); } catch {}
         }
       }
-
       const envCode = process.env.IG_CHALLENGE_CODE?.trim();
       if (envCode) {
         await instagram.challenge.sendSecurityCode(envCode);
       } else {
-        const { code } = await inquirer.prompt([{ type: 'input', name: 'code', message: 'Instagram security code:' }]);
+        const { code } = await inquirer.prompt([
+          { type: 'input', name: 'code', message: 'Instagram security code:' },
+        ]);
         await instagram.challenge.sendSecurityCode(code);
       }
     } else {
       throw err;
     }
   }
-
   logLocal('로그인 완료');
   await saveIgState();
 }
@@ -221,14 +216,12 @@ async function login() {
 async function uploadImageToInstagram() {
   logLocal('인스타그램 피드 업로드 시작...');
   const parsedDay = getDate().split('-');
-  const week = ['일', '월', '화', '수', '목', '금', '토'][getDayOfWeek(getDate())];
-  const todayDate = `${parsedDay[0]}년 ${parsedDay[1]}월 ${parsedDay[2]}일 ${week}요일`;
-
+  const todayDate = `${parsedDay[0]}년 ${parsedDay[1]}월 ${parsedDay[2]}일 ${getDayOfWeek(getDate())}요일`;
   try {
     const imagePath = './assets/results/meal.png';
-    const file = fs.readFileSync(imagePath);
+    const image = { file: fs.readFileSync(imagePath) };
     await instagram.publish.photo({
-      file,
+      file: image.file,
       caption: `미림마이스터고 급식\n\n${todayDate}\n#급식 #미림마이스터고`
     });
     logLocal('인스타그램 피드 업로드 성공');
@@ -259,26 +252,22 @@ async function run() {
   await login();
   logLocal('급식 데이터 가져오는 중...');
   const mealData = await getMealData(today);
-
-  if (!mealData.dishName || mealData.dishName.length === 0 || mealData.dishName === '급식 정보가 없습니다.') {
+  if (mealData.dishName === undefined || mealData.dishName.length === 0 || mealData.dishName === '급식 정보가 없습니다.') {
     logLocal('급식 정보가 없습니다. 업로드를 건너뜁니다.');
     return;
   }
-
   logLocal(`급식 데이터: ${JSON.stringify(mealData.dishName)}`);
   logLocal('급식 이미지 생성 중...');
   await createImage(mealData.dishName, today);
   logLocal('급식 이미지 생성 완료');
-
   const uploadMode = process.env.UPLOAD_MODE;
-
+  logLocal(`업로드 모드: ${uploadMode}`);
   if (uploadMode === 'all' || uploadMode === 'post') {
     await uploadImageToInstagram();
   }
   if (uploadMode === 'all' || uploadMode === 'story') {
     await uploadStory();
   }
-
   logLocal('===== 급식 자동 업로드 완료 =====');
 }
 
@@ -289,28 +278,22 @@ async function runWithRetry(fn, delay = 60000, maxAttempts = 15) {
       return;
     } catch (error) {
       logLocal(`시도 ${attempt}/${maxAttempts} 실패: ${error.message}`);
-
       if (error?.name === 'IgLoginRequiredError' || error?.message?.includes('login_required')) {
         logLocal('로그인 필요 - 재로그인 시도...');
         if (fs.existsSync(IG_STATE_PATH)) fs.unlinkSync(IG_STATE_PATH);
         await login();
         continue;
       }
-
+      logLocal(`${delay / 1000}초 후 재시도...`);
       await new Promise(resolve => setTimeout(resolve, delay));
     }
   }
-
   logLocal(`최대 시도 횟수(${maxAttempts}) 초과`);
 }
 
 logLocal('크론 스케줄러 시작 ');
-cron.schedule(
-  '0 0 6 * * 1-5',
-  async () => {
-    const currentTime = new Date().toLocaleString('en-US', { timeZone: 'Asia/Seoul' });
-    logLocal(`크론 작업 트리거됨 - 현재 시간: ${currentTime}`);
-    await runWithRetry(run);
-  },
-  { timezone: 'Asia/Seoul' }
-);
+cron.schedule('0 0 6 * * 1-5', async () => {
+  const currentTime = new Date().toLocaleString('en-US', { timeZone: 'Asia/Seoul' });
+  logLocal(`크론 작업 트리거됨 - 현재 시간: ${currentTime}`);
+  await runWithRetry(run);
+}, { timezone: 'Asia/Seoul' });
