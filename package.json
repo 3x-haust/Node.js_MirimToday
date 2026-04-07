@@ -17,8 +17,8 @@
     "discord.js": "^14.15.2",
     "dotenv": "^16.4.5",
     "fs": "^0.0.1-security",
+    "igramapi": "^1.48.3",
     "inquirer": "^12.9.3",
-    "instagram-private-api": "^1.46.1",
     "node-cron": "^3.0.3",
     "request-promise": "^4.2.6",
     "util": "^0.12.5"

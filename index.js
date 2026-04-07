@@ -1,4 +1,4 @@
-import { IgApiClient, IgCheckpointError } from 'instagram-private-api';
+import { IgApiClient, IgCheckpointError, IgLoginTwoFactorRequiredError } from 'igramapi';
 import fs from 'fs';
 import path from 'path';
 import dotenv from 'dotenv';
@@ -19,6 +19,11 @@ const instagram = new IgApiClient();
 const IG_STATE_PATH = './.ig-state.json';
 const LOG_DIR = './logs';
 const LOG_FILE = path.join(LOG_DIR, 'app.log');
+const JOB_LOCK_PATH = './.job.lock';
+const JOB_LOCK_STALE_MS = Number(process.env.JOB_LOCK_STALE_MS || 2 * 60 * 60 * 1000);
+const CRON_EXPRESSION = process.env.CRON_SCHEDULE?.trim() || '0 6 * * 1-5';
+const CRON_TIMEZONE = process.env.CRON_TIMEZONE?.trim() || 'Asia/Seoul';
+let isJobRunning = false;
 
 function ensureLogDir() {
   try {
@@ -54,6 +59,144 @@ async function loadIgStateIfExists() {
     }
   } catch {}
   return false;
+}
+
+function safeStringify(value) {
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return '';
+  }
+}
+
+function getErrorBody(error) {
+  const body = error?.response?.body;
+  if (!body) return '';
+  const raw = typeof body === 'string' ? body : safeStringify(body);
+  return raw
+    .replace(/("two_factor_identifier"\s*:\s*")[^"]+(")/g, '$1[REDACTED]$2')
+    .replace(/("trusted_notification_polling_nonce"\s*:\s*")[^"]+(")/g, '$1[REDACTED]$2')
+    .replace(/("verification_code"\s*:\s*")[^"]+(")/g, '$1[REDACTED]$2');
+}
+
+function summarizeError(error) {
+  if (!error) return 'Unknown error';
+  const statusCode = error?.response?.statusCode;
+  const message = String(error?.message || '').trim();
+  const bodyText = getErrorBody(error);
+  const parts = [];
+  if (message) parts.push(message);
+  if (statusCode) parts.push(`status=${statusCode}`);
+  if (bodyText) parts.push(`body=${bodyText}`);
+  return parts.join(' | ') || String(error);
+}
+
+function isCheckpointError(error) {
+  const message = String(error?.message || '');
+  const name = String(error?.name || '');
+  const bodyMessage = String(error?.response?.body?.message || '');
+  const bodyText = getErrorBody(error);
+  const token = `${message} ${name} ${bodyMessage} ${bodyText}`.toLowerCase();
+
+  return (
+    error instanceof IgCheckpointError ||
+    token.includes('checkpoint_required') ||
+    token.includes('challenge_required')
+  );
+}
+
+function isLoginRequiredError(error) {
+  const token = `${String(error?.name || '')} ${String(error?.message || '')} ${getErrorBody(error)}`.toLowerCase();
+  return token.includes('igloginrequirederror') || token.includes('login_required');
+}
+
+function isRateLimitedError(error) {
+  const token = `${String(error?.name || '')} ${String(error?.message || '')} ${getErrorBody(error)}`.toLowerCase();
+  const statusCode = Number(error?.response?.statusCode || 0);
+  return (
+    statusCode === 429 ||
+    token.includes('please wait a few minutes') ||
+    token.includes('rate_limit') ||
+    token.includes('sentry_block') ||
+    token.includes('feedback_required')
+  );
+}
+
+function isTwoFactorRequiredError(error) {
+  const token = `${String(error?.name || '')} ${String(error?.message || '')} ${getErrorBody(error)}`.toLowerCase();
+  return (
+    error instanceof IgLoginTwoFactorRequiredError ||
+    error?.response?.body?.two_factor_required === true ||
+    token.includes('two_factor_required')
+  );
+}
+
+function isInvalidTwoFactorCodeError(error) {
+  const token = `${String(error?.name || '')} ${String(error?.message || '')} ${getErrorBody(error)}`.toLowerCase();
+  return (
+    token.includes('invalid_verficaition_code') ||
+    token.includes('invalid_verification_code') ||
+    token.includes('please check the security code and try again')
+  );
+}
+
+function resolveTwoFactorVerificationMethod(twoFactorInfo) {
+  if (process.env.IG_2FA_METHOD?.trim()) return process.env.IG_2FA_METHOD.trim();
+  if (twoFactorInfo?.totp_two_factor_on) return '3';
+  return '1';
+}
+
+function isProcessAlive(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function readJobLock() {
+  try {
+    if (!fs.existsSync(JOB_LOCK_PATH)) return null;
+    return JSON.parse(fs.readFileSync(JOB_LOCK_PATH, 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
+function acquireJobLock() {
+  const lockData = { pid: process.pid, startedAt: Date.now() };
+  try {
+    fs.writeFileSync(JOB_LOCK_PATH, JSON.stringify(lockData), { encoding: 'utf8', flag: 'wx' });
+    return { acquired: true, reason: 'new' };
+  } catch (error) {
+    if (error?.code !== 'EEXIST') return { acquired: false, reason: 'write_failed' };
+  }
+
+  const existing = readJobLock();
+  if (!existing) return { acquired: false, reason: 'locked' };
+
+  const isStale = Date.now() - Number(existing.startedAt || 0) > JOB_LOCK_STALE_MS;
+  const alive = isProcessAlive(Number(existing.pid));
+  if (!alive || isStale) {
+    try {
+      fs.unlinkSync(JOB_LOCK_PATH);
+      fs.writeFileSync(JOB_LOCK_PATH, JSON.stringify(lockData), { encoding: 'utf8', flag: 'wx' });
+      return { acquired: true, reason: !alive ? 'orphan_recovered' : 'stale_recovered' };
+    } catch {
+      return { acquired: false, reason: 'recover_failed' };
+    }
+  }
+  return { acquired: false, reason: `held_by_pid_${existing.pid}` };
+}
+
+function releaseJobLock() {
+  try {
+    const existing = readJobLock();
+    if (!existing) return;
+    if (Number(existing.pid) === process.pid) fs.unlinkSync(JOB_LOCK_PATH);
+  } catch {}
 }
 
 function getDayOfWeek(yyyyMMdd) {
@@ -177,16 +320,97 @@ async function login() {
   }
   try {
     logLocal('새로운 로그인 시도...');
-    const auth = await instagram.account.login(process.env.IG_USERNAME, process.env.IG_PASSWORD);
+    await instagram.simulate.preLoginFlow();
+    await instagram.account.login(process.env.IG_USERNAME, process.env.IG_PASSWORD);
+    process.nextTick(async () => {
+      try {
+        await instagram.simulate.postLoginFlow();
+      } catch {}
+    });
   } catch (err) {
-    if (err instanceof IgCheckpointError) {
+    if (isTwoFactorRequiredError(err)) {
+      const twoFactorInfo = err?.response?.body?.two_factor_info || {};
+      const twoFactorIdentifier = twoFactorInfo?.two_factor_identifier;
+      const username = twoFactorInfo?.username || process.env.IG_USERNAME;
+      const verificationMethod = resolveTwoFactorVerificationMethod(twoFactorInfo);
+      const channelHint = twoFactorInfo?.obfuscated_phone_number_2 || twoFactorInfo?.obfuscated_phone_number || '';
+      const maxTwoFactorAttempts = Number(process.env.IG_TWO_FACTOR_MAX_ATTEMPTS || 3);
+      if (!twoFactorIdentifier || !username) {
+        throw new Error(`two_factor_required: 식별자 정보가 없습니다. ${summarizeError(err)}`);
+      }
+
+      logLocal(`2단계 인증 필요 (method=${verificationMethod === '3' ? 'TOTP' : 'SMS'}${channelHint ? `, 대상=${channelHint}` : ''})`);
+      const env2faCode = (process.env.IG_TWO_FACTOR_CODE?.trim() || process.env.IG_2FA_CODE?.trim())?.replace(/[\s\-]/g, '');
+      let loginSuccess = false;
+      for (let attempt = 1; attempt <= maxTwoFactorAttempts; attempt++) {
+        let verificationCode = env2faCode;
+
+        if (verificationCode) {
+          logLocal('환경변수 IG_TWO_FACTOR_CODE/IG_2FA_CODE로 2FA 코드를 사용합니다.');
+        } else if (process.stdin.isTTY) {
+          const { code } = await inquirer.prompt([
+            {
+              type: 'input',
+              name: 'code',
+              message: verificationMethod === '3' ? 'Instagram Authenticator(TOTP) code:' : 'Instagram SMS code:',
+            },
+          ]);
+          verificationCode = String(code || '').trim();
+        } else {
+          throw new Error('two_factor_required: 대화형 입력이 불가능합니다. IG_TWO_FACTOR_CODE(또는 IG_2FA_CODE)를 설정하세요.');
+        }
+
+        if (!verificationCode) {
+          throw new Error('two_factor_required: 입력된 2FA 코드가 비어 있습니다.');
+        }
+
+        try {
+          await instagram.account.twoFactorLogin({
+            username,
+            verificationCode,
+            twoFactorIdentifier,
+            verificationMethod,
+            trustThisDevice: '1',
+          });
+          loginSuccess = true;
+          break;
+        } catch (twoFactorErr) {
+          if (!isInvalidTwoFactorCodeError(twoFactorErr)) throw twoFactorErr;
+          if (env2faCode) {
+            throw new Error(`two_factor_required: 환경변수 코드가 유효하지 않습니다. ${summarizeError(twoFactorErr)}`);
+          }
+          if (attempt >= maxTwoFactorAttempts) {
+            throw new Error(`two_factor_required: 코드 확인 실패(${attempt}/${maxTwoFactorAttempts}). ${summarizeError(twoFactorErr)}`);
+          }
+          logLocal(`2FA 코드 불일치 (${attempt}/${maxTwoFactorAttempts}) - 최신 SMS 코드를 다시 입력하세요.`);
+        }
+      }
+
+      if (!loginSuccess) {
+        throw new Error('two_factor_required: 2FA 로그인에 실패했습니다.');
+      }
+
+      process.nextTick(async () => {
+        try {
+          await instagram.simulate.postLoginFlow();
+        } catch {}
+      });
+    } else if (!isCheckpointError(err)) {
+      logLocal(`로그인 실패 상세: ${summarizeError(err)}`);
+      throw err;
+    } else {
+      logLocal(`checkpoint/challenge 감지: ${summarizeError(err)}`);
+      logLocal('본인확인 절차를 시도합니다.');
       try {
         const challenge = err?.response?.body?.challenge;
         if (challenge) {
           instagram.state.checkpoint = challenge;
           instagram.state.challenge = challenge;
         }
-      } catch {}
+      } catch {
+        // noop
+      }
+
       try {
         await instagram.challenge.auto(true);
       } catch {
@@ -196,19 +420,22 @@ async function login() {
           try { await instagram.challenge.selectVerifyMethod('email'); } catch {}
         }
       }
+
       const envCode = process.env.IG_CHALLENGE_CODE?.trim();
       if (envCode) {
         await instagram.challenge.sendSecurityCode(envCode);
-      } else {
+        logLocal('환경변수 IG_CHALLENGE_CODE로 보안코드 제출 완료');
+      } else if (process.stdin.isTTY) {
         const { code } = await inquirer.prompt([
           { type: 'input', name: 'code', message: 'Instagram security code:' },
         ]);
         await instagram.challenge.sendSecurityCode(code);
+      } else {
+        throw new Error('checkpoint_required: 대화형 입력이 불가능합니다. 인스타 앱에서 본인확인을 완료하거나 IG_CHALLENGE_CODE를 설정하세요.');
       }
-    } else {
-      throw err;
     }
   }
+  await instagram.account.currentUser();
   logLocal('로그인 완료');
   await saveIgState();
 }
@@ -272,13 +499,31 @@ async function run() {
 }
 
 async function runWithRetry(fn, delay = 60000, maxAttempts = 15) {
+  const throttleDelay = Number(process.env.IG_THROTTLE_DELAY_MS || 10 * 60 * 1000);
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
       await fn();
       return;
     } catch (error) {
-      logLocal(`시도 ${attempt}/${maxAttempts} 실패: ${error.message}`);
-      if (error?.name === 'IgLoginRequiredError' || error?.message?.includes('login_required')) {
+      logLocal(`시도 ${attempt}/${maxAttempts} 실패: ${summarizeError(error)}`);
+      if (isTwoFactorRequiredError(error)) {
+        logLocal('2단계 인증 필요 - 코드 입력/설정 후 다시 실행하세요.');
+        throw error;
+      }
+      if (isInvalidTwoFactorCodeError(error)) {
+        logLocal('2FA 코드가 올바르지 않습니다. 반복 재시도하지 않고 종료합니다.');
+        throw error;
+      }
+      if (isCheckpointError(error)) {
+        logLocal('checkpoint_required 감지 - 반복 재시도를 중단합니다. 인스타 앱에서 본인확인을 완료한 뒤 다시 실행하세요.');
+        throw error;
+      }
+      if (isRateLimitedError(error)) {
+        logLocal(`로그인/요청 제한 감지 - ${Math.floor(throttleDelay / 1000)}초 대기 후 재시도합니다.`);
+        await new Promise(resolve => setTimeout(resolve, throttleDelay));
+        continue;
+      }
+      if (isLoginRequiredError(error)) {
         logLocal('로그인 필요 - 재로그인 시도...');
         if (fs.existsSync(IG_STATE_PATH)) fs.unlinkSync(IG_STATE_PATH);
         await login();
@@ -288,12 +533,26 @@ async function runWithRetry(fn, delay = 60000, maxAttempts = 15) {
       await new Promise(resolve => setTimeout(resolve, delay));
     }
   }
-  logLocal(`최대 시도 횟수(${maxAttempts}) 초과`);
+  const maxRetryError = new Error(`최대 시도 횟수(${maxAttempts}) 초과`);
+  logLocal(maxRetryError.message);
+  throw maxRetryError;
 }
 
-logLocal('크론 스케줄러 시작 ');
-cron.schedule('0 0 6 * * 1-5', async () => {
-  const currentTime = new Date().toLocaleString('en-US', { timeZone: 'Asia/Seoul' });
+logLocal(`크론 스케줄러 시작 (표현식: ${CRON_EXPRESSION}, 타임존: ${CRON_TIMEZONE})`);
+cron.schedule(CRON_EXPRESSION, async () => {
+  if (isJobRunning) {
+    logLocal('이전 작업이 아직 실행 중이라 이번 크론 트리거를 건너뜁니다.');
+    return;
+  }
+
+  const lock = acquireJobLock();
+  if (!lock.acquired) {
+    logLocal(`다른 프로세스가 작업 중이라 이번 크론 트리거를 건너뜁니다. (${lock.reason})`);
+    return;
+  }
+
+  isJobRunning = true;
+  const currentTime = new Date().toLocaleString('en-US', { timeZone: CRON_TIMEZONE });
   logLocal(`크론 작업 트리거됨 - 현재 시간: ${currentTime}`);
   await runWithRetry(run);
 }, { timezone: 'Asia/Seoul' });
