@@ -10,7 +10,14 @@ import os
 import sys
 
 
-def load_sessionid(state_path: str) -> str:
+def load_sessionid() -> str:
+    s = os.environ.get("IG_SESSIONID", "").strip()
+    if s:
+        return s
+    state_path = os.environ.get("IG_SESSIONID_FILE", "").strip()
+    if not state_path:
+        runtime = os.environ.get("RUNTIME_DIR", "").strip() or "."
+        state_path = os.path.join(runtime, ".ig-state.json")
     try:
         with open(state_path, "r", encoding="utf-8") as f:
             state = json.load(f)
@@ -20,7 +27,7 @@ def load_sessionid(state_path: str) -> str:
                 return c["value"]
     except Exception:
         pass
-    return os.environ.get("IG_SESSIONID", "").strip()
+    return ""
 
 
 def main() -> int:
@@ -35,7 +42,7 @@ def main() -> int:
         print("오류: IG_USERNAME 이 없습니다.")
         return 10
 
-    sessionid = load_sessionid("./.ig-state.json")
+    sessionid = load_sessionid()
     if not sessionid:
         print("오류: sessionid 가 없습니다. .ig-state.json 을 시드하거나 IG_SESSIONID 를 설정하세요.")
         return 11

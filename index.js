@@ -36,14 +36,23 @@ function applyInstagramAppVersion() {
 
   logLocal(`Instagram 앱 버전 override: ${IG_APP_VERSION} (${IG_APP_VERSION_CODE})`);
 }
-const IG_STATE_PATH = './.ig-state.json';
-const LOG_DIR = './logs';
+const RUNTIME_DIR = process.env.RUNTIME_DIR?.trim() || '.';
+const IG_STATE_PATH = process.env.IG_STATE_PATH?.trim() || path.join(RUNTIME_DIR, '.ig-state.json');
+const LOG_DIR = process.env.LOG_DIR?.trim() || path.join(RUNTIME_DIR, 'logs');
 const LOG_FILE = path.join(LOG_DIR, 'app.log');
-const JOB_LOCK_PATH = './.job.lock';
+const JOB_LOCK_PATH = process.env.JOB_LOCK_PATH?.trim() || path.join(RUNTIME_DIR, '.job.lock');
+const RESULT_IMAGE_PATH = process.env.RESULT_IMAGE_PATH?.trim() || './assets/results/meal.png';
 const JOB_LOCK_STALE_MS = Number(process.env.JOB_LOCK_STALE_MS || 2 * 60 * 60 * 1000);
 const CRON_EXPRESSION = process.env.CRON_SCHEDULE?.trim() || '0 6 * * 1-5';
 const CRON_TIMEZONE = process.env.CRON_TIMEZONE?.trim() || 'Asia/Seoul';
 let isJobRunning = false;
+
+function ensureParentDir(filePath) {
+  try {
+    const dir = path.dirname(filePath);
+    if (dir && dir !== '.' && !fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  } catch {}
+}
 
 function ensureLogDir() {
   try {
@@ -187,6 +196,7 @@ function readJobLock() {
 
 function acquireJobLock() {
   const lockData = { pid: process.pid, startedAt: Date.now() };
+  ensureParentDir(JOB_LOCK_PATH);
   try {
     fs.writeFileSync(JOB_LOCK_PATH, JSON.stringify(lockData), { encoding: 'utf8', flag: 'wx' });
     return { acquired: true, reason: 'new' };
@@ -306,7 +316,8 @@ export async function createImage(mealData, date) {
     yPosition = Math.max(after, yPosition + 200) + 120;
   }
 
-  const out = fs.createWriteStream('./assets/results/meal.png');
+  ensureParentDir(RESULT_IMAGE_PATH);
+  const out = fs.createWriteStream(RESULT_IMAGE_PATH);
   const stream = canvas.createPNGStream();
   stream.pipe(out);
 
@@ -464,9 +475,9 @@ async function login() {
 }
 
 async function runIgUpload(mode, caption = '') {
-  const { stdout, stderr } = await execFile(IG_PYTHON, [IG_POST_SCRIPT, '--image', './assets/results/meal.png', '--mode', mode], {
+  const { stdout, stderr } = await execFile(IG_PYTHON, [IG_POST_SCRIPT, '--image', RESULT_IMAGE_PATH, '--mode', mode], {
     cwd: process.cwd(),
-    env: { ...process.env, IG_CAPTION: caption },
+    env: { ...process.env, IG_CAPTION: caption, IG_SESSIONID_FILE: IG_STATE_PATH },
     maxBuffer: 20 * 1024 * 1024,
   });
   const out = (stdout || '').trim() || (stderr || '').trim();
