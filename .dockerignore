@@ -16,6 +16,12 @@
 **/compose*
 **/Dockerfile*
 **/node_modules
+.venv
+logs
+.ig-state.json
+index.js.bak
+.job.lock
+*.log
 **/npm-debug.log
 **/obj
 **/secrets.dev.yaml

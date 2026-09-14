@@ -6,16 +6,36 @@ import cron from 'node-cron';
 import { getMealData } from './mealData.js';
 import { createCanvas, loadImage, registerFont } from 'canvas';
 import inquirer from 'inquirer';
-import { exec as execCb } from 'child_process';
+import { exec as execCb, execFile as execFileCb } from 'child_process';
 import util from 'util';
 import { EventEmitter } from 'events';
 
 EventEmitter.defaultMaxListeners = 30;
 
 const exec = util.promisify(execCb);
+const execFile = util.promisify(execFileCb);
 dotenv.config();
 
 const instagram = new IgApiClient();
+
+const IG_APP_VERSION = process.env.IG_APP_VERSION?.trim() || '446.0.0.49.77';
+const IG_APP_VERSION_CODE = process.env.IG_APP_VERSION_CODE?.trim() || '385211303';
+const IG_PYTHON = process.env.IG_PYTHON?.trim() || './.venv/bin/python';
+const IG_POST_SCRIPT = './ig_post.py';
+
+function applyInstagramAppVersion() {
+  const constants = instagram?.state?.constants;
+
+  if (!constants) {
+    logLocal('Instagram 앱 버전 override 실패: state.constants를 찾을 수 없습니다.');
+    return;
+  }
+
+  constants.APP_VERSION = IG_APP_VERSION;
+  constants.APP_VERSION_CODE = IG_APP_VERSION_CODE;
+
+  logLocal(`Instagram 앱 버전 override: ${IG_APP_VERSION} (${IG_APP_VERSION_CODE})`);
+}
 const IG_STATE_PATH = './.ig-state.json';
 const LOG_DIR = './logs';
 const LOG_FILE = path.join(LOG_DIR, 'app.log');
@@ -308,6 +328,7 @@ export function getDate() {
 
 async function login() {
   logLocal('로그인 시도 중...');
+  applyInstagramAppVersion();
   instagram.state.generateDevice(process.env.IG_USERNAME);
   const restored = await loadIgStateIfExists();
   if (restored) {
@@ -316,7 +337,9 @@ async function login() {
       logLocal('저장된 세션으로 로그인 성공');
       await saveIgState();
       return;
-    } catch {}
+    } catch (restoreErr) {
+      logLocal(`저장된 세션 인증 실패: ${summarizeError(restoreErr)}`);
+    }
   }
   try {
     logLocal('새로운 로그인 시도...');
@@ -440,21 +463,25 @@ async function login() {
   await saveIgState();
 }
 
+async function runIgUpload(mode, caption = '') {
+  const { stdout, stderr } = await execFile(IG_PYTHON, [IG_POST_SCRIPT, '--image', './assets/results/meal.png', '--mode', mode], {
+    cwd: process.cwd(),
+    env: { ...process.env, IG_CAPTION: caption },
+    maxBuffer: 20 * 1024 * 1024,
+  });
+  const out = (stdout || '').trim() || (stderr || '').trim();
+  if (out) logLocal(out);
+}
+
 async function uploadImageToInstagram() {
   logLocal('인스타그램 피드 업로드 시작...');
   const parsedDay = getDate().split('-');
   const todayDate = `${parsedDay[0]}년 ${parsedDay[1]}월 ${parsedDay[2]}일 ${getDayOfWeek(getDate())}요일`;
   try {
-    const imagePath = './assets/results/meal.png';
-    const image = { file: fs.readFileSync(imagePath) };
-    await instagram.publish.photo({
-      file: image.file,
-      caption: `미림마이스터고 급식\n\n${todayDate}\n#급식 #미림마이스터고`
-    });
+    await runIgUpload('feed', `미림마이스터고 급식\n\n${todayDate}\n#급식 #미림마이스터고`);
     logLocal('인스타그램 피드 업로드 성공');
-    await saveIgState();
   } catch (error) {
-    logLocal(`인스타그램 피드 업로드 실패: ${error.message}`);
+    logLocal(`인스타그램 피드 업로드 실패: ${summarizeError(error)}`);
     throw error;
   }
 }
@@ -462,13 +489,10 @@ async function uploadImageToInstagram() {
 async function uploadStory() {
   logLocal('인스타그램 스토리 업로드 시작...');
   try {
-    const imagePath = './assets/results/meal.png';
-    const image = fs.readFileSync(imagePath);
-    await instagram.publish.story({ file: image });
+    await runIgUpload('story');
     logLocal('인스타그램 스토리 업로드 성공');
-    await saveIgState();
   } catch (error) {
-    logLocal(`인스타그램 스토리 업로드 실패: ${error.message}`);
+    logLocal(`인스타그램 스토리 업로드 실패: ${summarizeError(error)}`);
     throw error;
   }
 }
@@ -476,7 +500,6 @@ async function uploadStory() {
 async function run() {
   const today = getDate();
   logLocal(`===== 급식 자동 업로드 시작 (${today}) =====`);
-  await login();
   logLocal('급식 데이터 가져오는 중...');
   const mealData = await getMealData(today);
   if (mealData.dishName === undefined || mealData.dishName.length === 0 || mealData.dishName === '급식 정보가 없습니다.') {
