@@ -588,5 +588,11 @@ cron.schedule(CRON_EXPRESSION, async () => {
   isJobRunning = true;
   const currentTime = new Date().toLocaleString('en-US', { timeZone: CRON_TIMEZONE });
   logLocal(`크론 작업 트리거됨 - 현재 시간: ${currentTime}`);
-  await runWithRetry(run);
+  try {
+    await runWithRetry(run);
+  } finally {
+    isJobRunning = false;
+    releaseJobLock();
+    logLocal('크론 작업 상태 초기화 완료');
+  }
 }, { timezone: 'Asia/Seoul' });
